@@ -97,9 +97,11 @@ def main(argv):
     def step_nnx(model: MLP, optimizer: nnx.Optimizer):
       pass
 
+    cached_step_nnx = nnx.cache_args(step_nnx, model, optimizer)
+
     t0 = time()
     for _ in range(total_steps):
-      step_nnx(model, optimizer)
+      cached_step_nnx()
 
     total_time = time() - t0
     time_per_step = total_time / total_steps

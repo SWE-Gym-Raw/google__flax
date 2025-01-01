@@ -13,9 +13,6 @@
 # limitations under the License.
 
 import abc
-import contextlib
-import dataclasses
-import threading
 import typing as tp
 
 import jax
@@ -67,7 +64,7 @@ def extract_graph_nodes(
   | tuple[A, tuple[tp.Any, ...], tuple[tp.Any, ...]]
 ):
   """Extracts all graph nodes from a pytree."""
-  nodes = graph.RefMap[tp.Any, Index]()
+  nodes: dict[tp.Any, Index] = {}
   node_prefixes = []
   leaves = []
 
@@ -134,11 +131,10 @@ def check_consistent_aliasing(
   prefix: tuple[tp.Any, ...],
   /,
   *,
-  node_prefixes: graph.RefMap[tp.Any, list[tuple[PathParts, tp.Any]]]
-  | None = None,
+  node_prefixes: dict[tp.Any, list[tuple[PathParts, tp.Any]]] | None = None,
 ):
   if node_prefixes is None:
-    node_prefixes = graph.RefMap()
+    node_prefixes = {}
 
   # collect all paths and prefixes for each node
   for path, value in graph.iter_graph(node):
@@ -180,50 +176,6 @@ def check_consistent_aliasing(
       'Inconsistent aliasing detected. The following nodes have different prefixes:\n'
       + '\n'.join(node_msgs)
     )
-
-
-# -----------------------------
-# broadcast
-# -----------------------------
-
-
-@dataclasses.dataclass
-class BroadcastContext(threading.local):
-  broadcast_state_stacks: dict[str, list[tp.Any]] = dataclasses.field(
-    default_factory=dict
-  )
-
-
-BROADCAST_CONTEXT = BroadcastContext()
-
-
-@contextlib.contextmanager
-def broadcast_state(tag: str, state: tp.Any):
-  if tag in BROADCAST_CONTEXT.broadcast_state_stacks:
-    stack = BROADCAST_CONTEXT.broadcast_state_stacks[tag]
-  else:
-    stack = BROADCAST_CONTEXT.broadcast_state_stacks[tag] = []
-  stack.append(state)
-  try:
-    yield
-  finally:
-    stack.pop()
-    if not stack:
-      del BROADCAST_CONTEXT.broadcast_state_stacks[tag]
-
-
-def get_broadcast_state(tag: str) -> tp.Any:
-  if tag not in BROADCAST_CONTEXT.broadcast_state_stacks:
-    raise ValueError(f'No broadcast state found for {tag!r}')
-
-  stack = BROADCAST_CONTEXT.broadcast_state_stacks[tag]
-
-  if not stack:
-    raise RuntimeError(
-      f'Empty broadcast state stack for {tag!r}, this is a bug'
-    )
-
-  return stack[-1]
 
 # -----------------------------
 # to_tree/from_tree
@@ -319,7 +271,7 @@ def to_tree(
     [graph.SplitContext, KeyPath, Prefix, Leaf], tp.Any
   ] = default_split_fn,
   map_non_graph_nodes: bool = False,
-  ctxtag: str | None = None,
+  ctxtag: tp.Hashable | None = None,
   check_aliasing: bool = True,
 ) -> tp.Any:
   if prefix is Missing or prefix is None:
@@ -340,7 +292,7 @@ def to_tree(
 
   assert len(leaf_keys) == len(leaf_prefixes)
   leaves_out = []
-  node_prefixes = graph.RefMap[tp.Any, list[tuple[PathParts, tp.Any]]]()
+  node_prefixes: dict[tp.Any, list[tuple[PathParts, tp.Any]]] = {}
 
   with graph.split_context(ctxtag) as split_ctx:
     for (keypath, leaf), leaf_prefix in zip(leaf_keys, leaf_prefixes):
@@ -384,7 +336,7 @@ def from_tree(
   is_leaf: tp.Callable[[Leaf], bool] = is_tree_node,
   map_non_graph_nodes: bool = False,
   is_inner: bool | None = None,
-  ctxtag: str | None = None,
+  ctxtag: tp.Hashable | None = None,
 ) -> tp.Any:
   if prefix is Missing or prefix is None:
     # fast path, no need for prefix broadcasting or consistent aliasing checks

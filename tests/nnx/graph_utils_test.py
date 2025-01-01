@@ -129,6 +129,35 @@ class TestGraphUtils(absltest.TestCase):
     ):
       nnx.graph.unflatten(graphdef, nnx.State({}))
 
+  def test_unflatten_return_variables(self):
+    a = Dict({'a': 1, 'b': nnx.Param(2)})
+    g = List([a, 3, a, nnx.Param(4)])
+
+    graphdef, state = nnx.graph.flatten(
+      g, with_paths=False, return_variables=True
+    )
+
+    self.assertLen(state, 2)
+    self.assertIsInstance(state, list)
+    self.assertIsInstance(state[0], nnx.Param)
+    self.assertIsInstance(state[1], nnx.Param)
+
+  def test_clone_with_same_variables(self):
+    a = Dict({'a': 1, 'b': nnx.Param(2)})
+    g = List([a, 3, a, nnx.Param(4)])
+
+    graphdef, state = nnx.graph.flatten(
+      g, with_paths=False, return_variables=True
+    )
+
+    g2 = nnx.graph.unflatten(graphdef, state)
+
+    self.assertIsNot(g, g2)
+    self.assertIsNot(g[0], g2[0])
+    self.assertIsNot(g[2], g2[2])
+    self.assertIs(g[0]['b'], g2[0]['b'])
+    self.assertIs(g[3], g2[3])
+
   def test_update_dynamic(self):
     a = {'a': 1, 'b': nnx.Param(2)}
     g = [a, 3, a, nnx.Param(4)]
@@ -354,10 +383,10 @@ class TestGraphUtils(absltest.TestCase):
       idx_out_ref_in: dict[int, Any] = {}
       m = nnx.graph.unflatten(graphdef, state, index_ref=idx_out_ref_in)
       ref_in_idx_out = nnx.graph.RefMap(
-        (v, k) for k, v in idx_out_ref_in.items()
+        {v: k for k, v in idx_out_ref_in.items()}
       )
       f(m)
-      ref_in_idx_in = nnx.graph.RefMap[Any, int]()
+      ref_in_idx_in = nnx.graph.RefMap()
       graphdef, state = nnx.graph.flatten(
         m, ref_index=ref_in_idx_in, ref_outer_index=ref_in_idx_out
       )
@@ -386,7 +415,7 @@ class TestGraphUtils(absltest.TestCase):
     a = m.a
     b = m.b
 
-    ref_out_idx_out = nnx.graph.RefMap[Any, int]()
+    ref_out_idx_out = nnx.graph.RefMap()
     graphdef: nnx.graph.GraphDef[Foo]
     graphdef, state = nnx.graph.flatten(m, ref_index=ref_out_idx_out)
     idx_out_ref_out = {v: k for k, v in ref_out_idx_out.items()}
@@ -397,10 +426,10 @@ class TestGraphUtils(absltest.TestCase):
       idx_out_ref_in: dict[int, Any] = {}
       m = nnx.graph.unflatten(graphdef, state, index_ref=idx_out_ref_in)
       ref_in_idx_out = nnx.graph.RefMap(
-        (v, k) for k, v in idx_out_ref_in.items()
+        {v: k for k, v in idx_out_ref_in.items()}
       )
       f(m)
-      ref_in_idx_in = nnx.graph.RefMap[Any, int]()
+      ref_in_idx_in = nnx.graph.RefMap()
       graphdef, state = nnx.graph.flatten(
         m, ref_index=ref_in_idx_in, ref_outer_index=ref_in_idx_out
       )
@@ -436,10 +465,10 @@ class TestGraphUtils(absltest.TestCase):
       idx_out_ref_in: dict[int, Any] = {}
       m = nnx.graph.unflatten(graphdef, state, index_ref=idx_out_ref_in)
       ref_in_idx_out = nnx.graph.RefMap(
-        (v, k) for k, v in idx_out_ref_in.items()
+        {v: k for k, v in idx_out_ref_in.items()}
       )
       f(m)
-      ref_in_idx_in = nnx.graph.RefMap[Any, int]()
+      ref_in_idx_in = nnx.graph.RefMap()
       graphdef, state = nnx.graph.flatten(
         m, ref_index=ref_in_idx_in, ref_outer_index=ref_in_idx_out
       )
@@ -822,26 +851,24 @@ class TestGraphUtils(absltest.TestCase):
   def test_fingerprint_basic(self):
     m = nnx.Linear(2, 3, rngs=nnx.Rngs(0))
     fp1 = nnx.graph.fingerprint(m)
-    m1_hash = hash(fp1)
-    self.assertIsInstance(m1_hash, int)
-
     fp2 = nnx.graph.fingerprint(m)
-    m2_hash = hash(fp2)
 
     self.assertEqual(fp1, fp2)
-    self.assertEqual(m1_hash, m2_hash)
+    self.assertTrue(nnx.graph.check_fingerprint(m, fp1))
+    self.assertTrue(nnx.graph.check_fingerprint(m, fp2))
 
   def test_fingerprint_variable_id_sensitive(self):
     m1 = nnx.Linear(2, 3, rngs=nnx.Rngs(0))
     fp1 = nnx.graph.fingerprint(m1)
-    m1_hash = hash(fp1)
 
     m2 = nnx.Linear(2, 3, rngs=nnx.Rngs(0))
     fp2 = nnx.graph.fingerprint(m2)
-    m2_hash = hash(fp2)
 
     self.assertNotEqual(fp1, fp2)
-    self.assertNotEqual(m1_hash, m2_hash)
+    self.assertTrue(nnx.graph.check_fingerprint(m1, fp1))
+    self.assertTrue(nnx.graph.check_fingerprint(m2, fp2))
+    self.assertFalse(nnx.graph.check_fingerprint(m1, fp2))
+    self.assertFalse(nnx.graph.check_fingerprint(m2, fp1))
 
   def test_fingerprint_module_id_insensitive(self):
     m1 = nnx.Linear(2, 3, rngs=nnx.Rngs(0))
@@ -851,12 +878,13 @@ class TestGraphUtils(absltest.TestCase):
     m1.bias = m2.bias
 
     fp1 = nnx.graph.fingerprint(m1)
-    m1_hash = hash(fp1)
     fp2 = nnx.graph.fingerprint(m2)
-    m2_hash = hash(fp2)
 
     self.assertNotEqual(fp1, fp2)
-    self.assertNotEqual(m1_hash, m2_hash)
+    self.assertTrue(nnx.graph.check_fingerprint(m1, fp1))
+    self.assertTrue(nnx.graph.check_fingerprint(m2, fp2))
+    self.assertFalse(nnx.graph.check_fingerprint(m1, fp2))
+    self.assertFalse(nnx.graph.check_fingerprint(m2, fp1))
 
 
 class SimpleModule(nnx.Module):
